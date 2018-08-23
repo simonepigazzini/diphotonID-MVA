@@ -1,0 +1,28 @@
+* Diphoton ID MVA studies
+
+** NN
+*** Setting up the environment 
+    - Connecting to CSCS:
+    #+BEGIN_EXAMPLE
+    ssh username@ela.cscs.ch
+    ssh daint
+    #+END_EXAMPLE
+
+    - Copy =/users/musella/env.sh= in =~/env.sh=. In the copied file '~' has to be
+      changed into "~musella" in order to be able to source Pasquale's environment. 
+
+    - Source the environment:
+      #+BEGIN_EXAMPLE
+      source /users/musella/my-env/bin/activate
+      #+END_EXAMPLE
+
+*** Training the NN for the diphoton ID
+    - Samples: already split, training and test samples are available in:
+      =/scratch/snx3000/spigazzi/diphotonID/samples/=
+
+    - Run the training:
+    #+BEGIN_EXAMPLE
+    ./train_ffwd_diphoId.py 
+    #+END_EXAMPLE
+
+    
