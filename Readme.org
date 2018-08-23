@@ -11,10 +11,7 @@
     - Copy =/users/musella/env.sh= in =~/env.sh=. In the copied file '~' has to be
       changed into "~musella" in order to be able to source Pasquale's environment. 
 
-    - Source the environment:
-      #+BEGIN_EXAMPLE
-      source /users/musella/my-env/bin/activate
-      #+END_EXAMPLE
+    - Source the environment =source ~/env.sh=
 
 *** Training the NN for the diphoton ID
     - Samples: already split, training and test samples are available in:
