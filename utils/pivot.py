@@ -113,11 +113,11 @@ class PivotClassifier(BaseEstimator):
             adv_loss = []
             for si in range(nsteps):
                 for di in range(n_dsc_steps):
-                    Xb,yb,wb = next(ep_gen)
-                    dsc_loss.append( dsc_model.train_on_batch(Xb,yb,wb) )
+                    Xb,yb,y2b,wb = next(ep_gen)
+                    dsc_loss.append( dsc_model.train_on_batch(Xb,y2b,wb) )
                 for ai in range(n_adv_steps):
-                    Xb,yb,wb = next(ep_gen)
-                    adv_loss.append( adv_model.train_on_batch(Xb,yb,wb) )
+                    Xb,yb,y2b,wb = next(ep_gen)
+                    adv_loss.append( adv_model.train_on_batch(Xb,[yb,y2b],[wb,wb]) )
                 if si % print_every == 1:
                     print("dsc_loss: %f  adv_loss: %f\r" %( np.array(dsc_loss).mean(), np.array(adv_loss).mean() ), )
             
@@ -134,7 +134,7 @@ class PivotClassifier(BaseEstimator):
 class Generator:
     
     def __init__(self,X,y,w,batch_size,syst_shift={}):
-        
+
         self.X = X
         self.y = y
         self.w = w
@@ -144,6 +144,7 @@ class Generator:
         self.nb = self.X.shape[0] // self.batch_size
         self.last_batch = X.shape[0] % batch_size
         self.syst_shift = syst_shift
+        self.y2 = [self.y]
 
         for feats, shifts in self.syst_shift.items():
             shifts = np.array(shifts).reshape(1, 1, -1)
@@ -156,30 +157,36 @@ class Generator:
             self.X[feats] += np.sum( (labels*shifts), axis=2)
             #print(np.diff(old_fits-self.X[feats]))
             print(self.y.shape, labels[:,0,:].shape)
-            self.y = [self.y, labels[:,0,:]]
+            self.y2.append( labels[:,0,:] )
+
+        self.y2 = np.hstack( self.y2 )
+        print( X.shape, y.shape, self.y2.shape, w.shape )
+
 
     def nbatches(self):
         return self.nb + (self.last_batch!=0)
     
     def __call__(self):
         
-        self.X,self.y,self.w = shuffle(self.X,self.y,self.w)    
+        self.X,self.y,self.y2,self.w = shuffle(self.X,self.y,self.y2,self.w)    
 
         while True:
             for ib in range(self.nb):
-                ret = []
-                ret.extend( [self.X[ib*self.batch_size:(ib+1)*self.batch_size],
-                             self.y[ib*self.batch_size:(ib+1)*self.batch_size]] )
-                if self.w is not None:
-                    ret.append( self.w[ib*self.batch_size:(ib+1)*self.batch_size] )
-                yield ret
+                ## ret = []
+                yield self.X.iloc[ib*self.batch_size:(ib+1)*self.batch_size],self.y[ib*self.batch_size:(ib+1)*self.batch_size],self.y2[ib*self.batch_size:(ib+1)*self.batch_size],self.w[ib*self.batch_size:(ib+1)*self.batch_size]
+                ## ret.extend( [self.X[ib*self.batch_size:(ib+1)*self.batch_size],
+                ##              self.y[ib*self.batch_size:(ib+1)*self.batch_size]] )
+                ## if self.w is not None:
+                ##     ret.append( self.w[ib*self.batch_size:(ib+1)*self.batch_size] )
+                ## yield ret
             if self.last_batch > 0:
-                ret = []
-                ret.extend( [self.X[-self.last_batch:],
-                             self.y[-self.last_batch:]] )
-                if self.w is not None:
-                    ret.append( self.w[-self.last_batch:] )
-                yield ret
+                yield self.X.iloc[-self.last_batch:],self.y[-self.last_batch:],self.y2[-self.last_batch:],self.w[-self.last_batch:]
+                ## ret = []
+                ## ret.extend( [self.X[-self.last_batch:],
+                ##              self.y[-self.last_batch:]] )
+                ## if self.w is not None:
+                ##     ret.append( self.w[-self.last_batch:] )
+                ## yield ret
 
             
         
