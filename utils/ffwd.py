@@ -134,8 +134,8 @@ class FFWDRegression(BaseEstimator):
             out_size = output_shape[0]
             if len(output_shape) > 1:
                 reshape = True
-                for idim in output_shape[1:]:
-                    out_size *= output_shape[idim]
+                out_size *= output_shape[1]
+
             constr = None
             if out_size == 1:
                 act = "sigmoid"
@@ -149,11 +149,15 @@ class FFWDRegression(BaseEstimator):
             self.model = Model( inputs=inputs, outputs=output )
             
         if docompile:
-            optimizer = getattr(keras.optimizers,self.optimizer)(**self.optimizer_params)
+            optimizer = self.get_optimizer()
 
             self.model.compile(optimizer=optimizer,loss=loss,metrics=[losses.mse0,losses.mae0,
                                                                       losses.r2_score0])
         return self.model
+
+    # ----------------------------------------------------------------------------------------------
+    def get_optimizer(self):
+        return getattr(keras.optimizers,self.optimizer)(**self.optimizer_params)
 
     # ----------------------------------------------------------------------------------------------
     def get_callbacks(self,has_valid=False,monitor='loss',save_best_only=True,kfold=-1):

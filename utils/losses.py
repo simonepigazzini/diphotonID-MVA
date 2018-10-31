@@ -78,6 +78,12 @@ def r2_score0(y_true,y_pred):
     return 1. - K.sum( K.square(y_true[:,0] - y_pred[:,0]) ) / K.sum( K.square(y_true[:,0] - K.mean(y_true[:,0]) ) )
 
 
+# ---------------------------------------------------------------------------------------------------
+def masked_categorical_crossentropy(y_true,y_pred):
+    
+    return y_true[:,0] * keras.losses.categorical_crossentropy(y_true[:,1:],y_pred)
+    
+
     
 # ---------------------------------------------------------------------------------------------------
 ## keras.losses.gauss_nll = gauss_nll
