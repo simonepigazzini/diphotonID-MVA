@@ -92,10 +92,8 @@ class FFWDRegression(BaseEstimator):
         
         if hasattr(losses,self.loss):
             loss = getattr(losses,self.loss)
-            ## print(loss,isinstance(loss,object))
             if isinstance(loss,object):
                 loss = loss(**self.loss_params)
-            ## print(loss)
         else:
             loss = self.loss
 
@@ -164,10 +162,10 @@ class FFWDRegression(BaseEstimator):
         if has_valid:
             monitor = 'val_'+monitor
         monitor_dir = self.monitor_dir
-        csv = CSVLogger("%s/metrics_kfold%i.csv" % (monitor_dir,kfold))
+        csv = CSVLogger("%s/%s_metrics_kfold%i.csv" % (self.name,monitor_dir,kfold))
         #save checkpoint only if it is a proper training, not cross-validation
         if kfold==-1 : 
-            checkpoint = ModelCheckpoint("%s/model-{epoch:02d}.hdf5" % monitor_dir,
+            checkpoint = ModelCheckpoint("%s/%s-model-{epoch:02d}.hdf5" % (self.name,monitor_dir),
                                          monitor=monitor,save_best_only=save_best_only,
                                          save_weights_only=False)
             return [csv,checkpoint]

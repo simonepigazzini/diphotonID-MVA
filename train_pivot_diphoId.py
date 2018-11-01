@@ -44,7 +44,8 @@ parser = OptionParser(option_list=[
     make_option("--hparams",type='string',dest='hparams',default=None),
     make_option("--seed",type='int',dest='seed',default=98543),
     make_option("--x-val",action="store_true",dest='x_val',default=False),
-    make_option("--nkfolds",type='int',dest='nkfolds',default=5)
+    make_option("--nkfolds",type='int',dest='nkfolds',default=5),
+    make_option("--pretrain",action="store_true",dest='pretrain',default=False),
 ])
 
 ## parse options
@@ -74,8 +75,8 @@ if options.hparams is not None:
 ## read data
 data = io.read_data(inp_file)
 
-data['isSignal'] = data['processIndex'] < 5
-data['isBkg'] = data['processIndex'] >= 5
+data['isSignal'] = (data['processIndex'] < 5).astype(np.float32)
+data['isBkg'] = (data['processIndex'] >= 5).astype(np.float32)
 X = data[features]
 y = data['isSignal'].values.reshape(-1,1)
 w = np.abs(data['weight'].values.ravel())
@@ -100,6 +101,10 @@ print(fit_kwargs)
 clf = ffwd.FFWDRegression('clf', X.shape[1:], y.shape[1:], loss='binary_crossentropy')
 dsc = ffwd.FFWDRegression('dsc', y.shape[1:], (1, 3), loss='categorical_crossentropy')
 net = pivot.PivotClassifier('pivot', clf, dsc)
+
+## if load_moedels
+## keras load model
+## clf.model = model 
 
 pprint(net.get_params())
 

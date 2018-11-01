@@ -1,6 +1,7 @@
 from .ffwd import FFWDRegression
 
 import numpy as np
+import pandas as pd
 
 from keras.layers import Input, Dense, Add, Multiply
 from keras.layers import Reshape, UpSampling1D, Flatten, concatenate, Cropping1D
@@ -22,6 +23,9 @@ from sklearn.base import BaseEstimator
 
 from sklearn.utils import shuffle
 
+from tqdm import tqdm
+from collections import OrderedDict
+
 from . import losses 
 
 
@@ -31,7 +35,7 @@ class PivotClassifier(BaseEstimator):
     def __init__(self, name, clf, dsc, 
                  dsc_optimizer='Adam', dsc_optimizer_params=dict(lr=1.e-04), 
                  adv_optimizer='Adam', adv_optimizer_params=dict(lr=1.e-04), 
-                 ext_dsc_inputs=False, lambd=50.):
+                 ext_dsc_inputs=False, lambd=50.,monitor_dir="./"):
         
         self.lambd = lambd
         self.clf = clf
@@ -44,17 +48,15 @@ class PivotClassifier(BaseEstimator):
         self.adv_optimizer_params = adv_optimizer_params
                 
         self.ext_dsc_inputs = ext_dsc_inputs
+        self.monitor_dir = monitor_dir
 
-    def __call__(self,docompile=False):
+
+    def __call__(self,docompile=False,save_best_only=True):
         
         clf = self.clf(docompile=False)
         dsc = self.dsc(docompile=False)
         
         wrapped_inputs = clf.outputs
-        ## wrapped_inputs = [clf.outputs]
-        ## if self.ext_dsc_inputs:
-        ##     wrapped_inputs.append(clf.inputs)
-            
         wrapped_clf = clf(clf.inputs)
         wrapped_adv = dsc(wrapped_inputs)
         
@@ -66,21 +68,33 @@ class PivotClassifier(BaseEstimator):
                 
         dsc.trainable = False
         clf.trainable = True
+        
         self.adv_model.compile(optimizer=adv_optimizer,
                                loss=[self.clf.loss,
                                      losses.masked_categorical_crossentropy],
-                               loss_weights=[1.,-self.lambd]
-        )
+                               loss_weights=[1.,-self.lambd],
+                           )
         
         dsc.trainable = True
         clf.trainable = False
         self.dsc_model.compile(optimizer=dsc_optimizer,
-                               loss=losses.masked_categorical_crossentropy
+                               loss=losses.masked_categorical_crossentropy,
         )
         
         return self.adv_model,self.dsc_model
 
+    # ----------------------------------------------------------------------------------------------
+    def get_callbacks(self,monitor='loss',save_best_only=True,label=""):
+        monitor_dir = self.monitor_dir
+        csv = CSVLogger("%s/%s_metrics.csv" % (label,monitor_dir))
+        checkpoint = ModelCheckpoint("%s/%s-model-{epoch:02d}.hdf5" % (label,monitor_dir),
+                                     monitor=monitor,save_best_only=save_best_only,
+                                     save_weights_only=False)
+        return [csv,checkpoint]
         
+
+        
+    # ----------------------------------------------------------------------------------------------
     def fit(self,X_train,y_train,w_train=None,
             validation_data=None,
             epochs=1,n_adv_steps=1,n_dsc_steps=100,
@@ -92,43 +106,65 @@ class PivotClassifier(BaseEstimator):
     ):
         
         if pretrain:
-            self.clf.fit(X,y[:,0],w,validation_data=validation_data,**pretrain_clf_args)
-
-            y_pred = self.clf.predict(X)
-            dsc_inputs = [y_pred]
-            if self.ext_adv_inputs:
-                dsc_inputs.append(X)
-            self.dsc.fit(dsc_inputs,y[:,1:],w,validation_data=validation_data,**pretrain_dsc_args)
-            
+            self.clf.fit(X_train,y_train[:,0],w_train,validation_data=validation_data,**pretrain_clf_args) ## FIXME doesn't work
+            ## y_pred = self.clf.predict(X_train)
+            ## dsc_inputs = [y_pred]
+            ## if self.ext_adv_inputs:
+            ##     dsc_inputs.append(X_train)
+            ## self.dsc.fit(dsc_inputs,y_train[:,1:],w_train,validation_data=dsc_validation_data,**pretrain_dsc_args)
             
         adv_model,dsc_model = self(docompile=True)
         
         gen = Generator(X_train,y_train,w_train,batch_size,syst_shift=syst_shift)
-        nbatches = gen.nbatches()
+        nbatches = gen.nbatches() 
         nsteps = nbatches // (n_dsc_steps+n_adv_steps)
+        
+        if validation_data is not None:
+            vgen = Generator(*validation_data,batch_size,syst_shift=syst_shift)
 
-        for ei in range(epochs):
+        ## callbacks=self.get_callbacks(save_best_only=save_best_only,label="adv")
+        ## callbacks=self.get_callbacks(save_best_only=save_best_only,label="dsc")
+        
+        store = dict(dsc_loss=[],
+                     adv_loss=[],adv_clf_loss=[],adv_dsc_loss=[],
+                     dsc_loss_valid=[],
+                     adv_loss_valid=[],adv_clf_loss_valid=[],adv_dsc_loss_valid=[])
+        
+        eprog =  tqdm(range(epochs),"epoch")
+        for ei in eprog:
             ep_gen = gen()
             dsc_loss = []
             adv_loss = []
-            for si in range(nsteps):
+            sprog = tqdm(range(nsteps),"epoch %d" % ei,leave=True)
+            for si in sprog:
                 for di in range(n_dsc_steps):
-                    Xb,yb,y2b,wb = next(ep_gen)
-                    dsc_loss.append( dsc_model.train_on_batch(Xb,y2b,wb) )
+                    Xb,yb,wb = next(ep_gen)
+                    dsc_loss.append( dsc_model.train_on_batch(Xb,yb[-1],wb[-1]) )
                 for ai in range(n_adv_steps):
-                    Xb,yb,y2b,wb = next(ep_gen)
-                    adv_loss.append( adv_model.train_on_batch(Xb,[yb,y2b],[wb,wb]) )
-                if si % print_every == 1:
-                    print("dsc_loss: %f  adv_loss: %f\r" %( np.array(dsc_loss).mean(), np.array(adv_loss).mean() ), )
-            
-            print("dsc_loss: %f  adv_loss: %f" %( np.array(dsc_loss).mean(), np.array(adv_loss).mean() ), )
+                    Xb,yb,wb = next(ep_gen)
+                    adv_loss.append( adv_model.train_on_batch(Xb,yb,wb) )
+                    if si % print_every == 1:
+                        sprog.set_postfix( OrderedDict( [ ("dsc_loss",np.array(dsc_loss).mean()), ("adv_loss",np.array(adv_loss).mean(axis=0)) ] ) )
+                
+            dsc_loss = np.array(dsc_loss).mean()
+            adv_loss = np.array(adv_loss).mean(axis=0)
+            epostfix = [ ("dsc_loss",dsc_loss), ("adv_loss",adv_loss) ]
+            store["dsc_loss"].append(dsc_loss)
+            store["adv_loss"].append(adv_loss[0])
+            store["adv_clf_loss"].append(adv_loss[1])
+            store["adv_dsc_loss"].append(adv_loss[2])
             if validation_data is not None:
-                Xvalid, yvalid, wvalid = validation_data
-                valid_dsc = dsc_model.evaluate(Xvalid,yvalid,sample_weight=wvalid,batch_size=batch_size)
-                valid_adv = adv_model.evaluate(Xvalid,yvalid,sample_weight=wvalid,batch_size=batch_size)
-                print(" dsc_loss_valid: %f  adv_loss_valid: %f" %( valid_dsc, valid_adv ) )
-            else:
-                print()
+                dsc_loss_valid = dsc_model.evaluate_generator(vgen(False),steps=vgen.nbatches())
+                adv_loss_valid = adv_model.evaluate_generator(vgen(True),steps=vgen.nbatches())
+                epostfix += [ ("dsc_loss_valid",dsc_loss_valid), ("adv_loss_valid",np.array(adv_loss_valid)) ]
+                store["dsc_loss_valid"].append(dsc_loss_valid)
+                store["adv_loss_valid"].append(adv_loss_valid[0])
+                store["adv_clf_loss_valid"].append(adv_loss_valid[1])
+                store["adv_dsc_loss_valid"].append(adv_loss_valid[2])
+            eprog.set_postfix( epostfix )
+            pd.DataFrame(store).to_csv(self.monitor_dir+"/pivot_metrics.csv")
+            ## FIXME save models
+            
 
 # --------------------------------------------------------------------------------------------------
 class Generator:
@@ -153,9 +189,7 @@ class Generator:
             labels = np.random.multinomial(1, probs.ravel(), (self.X.shape[0], 1))
             labels = np.append(labels, labels, axis=1)
             feats = [feat for feat in feats] 
-            #old_fits = self.X[feats]
             self.X[feats] += np.sum( (labels*shifts), axis=2)
-            #print(np.diff(old_fits-self.X[feats]))
             print(self.y.shape, labels[:,0,:].shape)
             self.y2.append( labels[:,0,:] )
 
@@ -166,28 +200,24 @@ class Generator:
     def nbatches(self):
         return self.nb + (self.last_batch!=0)
     
-    def __call__(self):
+    def __call__(self,returny1=True):
         
         self.X,self.y,self.y2,self.w = shuffle(self.X,self.y,self.y2,self.w)    
 
+        def mk_ret(p0,p1):
+            ret = [self.X.iloc[p0:p1]]
+            if returny1:
+                ret.extend( [ [self.y[p0:p1],self.y2[p0:p1]], [self.w[p0:p1],self.w[p0:p1]] ] )
+            else:
+                ret.extend( [ self.y2[p0:p1],self.w[p0:p1] ] )
+            return ret 
+            
         while True:
             for ib in range(self.nb):
-                ## ret = []
-                yield self.X.iloc[ib*self.batch_size:(ib+1)*self.batch_size],self.y[ib*self.batch_size:(ib+1)*self.batch_size],self.y2[ib*self.batch_size:(ib+1)*self.batch_size],self.w[ib*self.batch_size:(ib+1)*self.batch_size]
-                ## ret.extend( [self.X[ib*self.batch_size:(ib+1)*self.batch_size],
-                ##              self.y[ib*self.batch_size:(ib+1)*self.batch_size]] )
-                ## if self.w is not None:
-                ##     ret.append( self.w[ib*self.batch_size:(ib+1)*self.batch_size] )
-                ## yield ret
+                yield mk_ret(ib*self.batch_size,(ib+1)*self.batch_size)
             if self.last_batch > 0:
-                yield self.X.iloc[-self.last_batch:],self.y[-self.last_batch:],self.y2[-self.last_batch:],self.w[-self.last_batch:]
-                ## ret = []
-                ## ret.extend( [self.X[-self.last_batch:],
-                ##              self.y[-self.last_batch:]] )
-                ## if self.w is not None:
-                ##     ret.append( self.w[-self.last_batch:] )
-                ## yield ret
-
+                yield mk_ret(-self.last_batch,None)
+                
             
         
         
