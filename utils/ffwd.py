@@ -162,10 +162,10 @@ class FFWDRegression(BaseEstimator):
         if has_valid:
             monitor = 'val_'+monitor
         monitor_dir = self.monitor_dir
-        csv = CSVLogger("%s/%s_metrics_kfold%i.csv" % (self.name,monitor_dir,kfold))
+        csv = CSVLogger("%s/%s_metrics_kfold%i.csv" % (monitor_dir,self.name,kfold))
         #save checkpoint only if it is a proper training, not cross-validation
         if kfold==-1 : 
-            checkpoint = ModelCheckpoint("%s/%s-model-{epoch:02d}.hdf5" % (self.name,monitor_dir),
+            checkpoint = ModelCheckpoint("%s/%s-model-{epoch:02d}.hdf5" % (monitor_dir,self.name),
                                          monitor=monitor,save_best_only=save_best_only,
                                          save_weights_only=False)
             return [csv,checkpoint]
@@ -224,7 +224,7 @@ class FFWDRegression(BaseEstimator):
             save_best_only=kwargs.pop('save_best_only',self.save_best_only)
             kwargs['callbacks'] = self.get_callbacks(has_valid=has_valid,
                                                      save_best_only=save_best_only,kfold=kfold)
-            
+    
         return model.fit(X_train,y_train,sample_weight=w_train,**kwargs)
 
 

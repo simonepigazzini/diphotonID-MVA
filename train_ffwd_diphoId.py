@@ -50,7 +50,7 @@ parser = OptionParser(option_list=[
 (options, args) = parser.parse_args()
 
 options.out_dir = options.out_dir+'/'+options.loss+'/'
-os.makedirs(options.out_dir)
+os.makedirs(options.out_dir, exist_ok=True)
 
 if options.features == '':
     features = dipho_features

@@ -9,11 +9,11 @@ import utils.io as io
 import os
 import json
 
+import argparse, argcomplete
+
 from pprint import pprint
 
 from sklearn.model_selection import train_test_split,KFold
-
-from optparse import OptionParser, make_option
 
 ##
 dipho_features = ['leadptom',
@@ -28,28 +28,28 @@ dipho_features = ['leadptom',
                   'vtxprob']
 
 ## command_line options
-parser = OptionParser(option_list=[
-    make_option("--inp-dir",type='string',dest="inp_dir",default=os.environ['SCRATCH']+'/diphotonID/samples/',help='input directory'),
-    make_option("--out-dir",type='string',dest="out_dir",default=os.environ['SCRATCH']+'/diphotonID/AN_output/'),
-    make_option("--inp-file",type='string',dest='inp_file',default='diphoton_id_s+b_train.hd5'),
-    make_option("--features",type='string',dest='features',default=''),
-    make_option("--normalize-target",action="store_true",dest="normalize_target",default=True),
-    make_option("--no-normalize-target",action="store_false",dest="normalize_target"),
-    make_option("--loss",type='string',dest="loss",default="binary_crossentropy"),
-    make_option("--valid-frac",type='float',dest='valid_frac',default=0.10),
-    make_option("--test-frac",type='float',dest='test_frac',default=0.10),
-    make_option("--batch-size",type='int',dest='batch_size',default=1024),
-    make_option("--epochs",type='int',dest='epochs',default=20),
-    make_option("--activations",type='string',dest='activations',default='relu'),
-    make_option("--hparams",type='string',dest='hparams',default=None),
-    make_option("--seed",type='int',dest='seed',default=98543),
-    make_option("--x-val",action="store_true",dest='x_val',default=False),
-    make_option("--nkfolds",type='int',dest='nkfolds',default=5),
-    make_option("--pretrain",action="store_true",dest='pretrain',default=False),
-])
+parser = argparse.ArgumentParser(description='Run adversarial training of CMS Hgg diphoton ID MVA')
+parser.add_argument('--inp-dir', type=str, dest='inp_dir', default=os.environ['SCRATCH']+'/diphotonID/samples/', help='input directory')
+parser.add_argument('--out-dir', type=str, dest='out_dir', default=os.environ['SCRATCH']+'/diphotonID/AN_output/')
+parser.add_argument('--inp-file', type=str, dest='inp_file', default='diphoton_id_s+b_train.hd5')
+parser.add_argument('--features', type=str, dest='features', default='')
+parser.add_argument('--lambda', type=float, dest='lambd', default=1.)
+parser.add_argument('--valid-frac', type=float, dest='valid_frac', default=0.10)
+parser.add_argument('--test-frac', type=float, dest='test_frac', default=0.10)
+parser.add_argument('--batch-size', type=int, dest='batch_size', default=1024)
+parser.add_argument('--epochs', type=int, dest='epochs', default=20)
+parser.add_argument('--activations', type=str, dest='activations', default='relu')
+parser.add_argument('--hparams', type=str, dest='hparams', default=None)
+parser.add_argument('--seed', type=int, dest='seed', default=98543)
+parser.add_argument('--x-val', action='store_true', dest='x_val', default=False)
+parser.add_argument('--nkfolds', type=int, dest='nkfolds', default=5)
+parser.add_argument('--pretrain', action='store_true', dest='pretrain', default=False)
+parser.add_argument('--clf-pretrain-weights', type=str, dest='clf_pretrain_weights', default='')
+parser.add_argument('--dsc-pretrain-weights', type=str, dest='dsc_pretrain_weights', default='')
 
 ## parse options
-(options, args) = parser.parse_args()
+argcomplete.autocomplete(parser)
+options = parser.parse_args()
 
 options.out_dir = options.out_dir
 os.makedirs(options.out_dir, exist_ok=True)
@@ -72,7 +72,7 @@ if options.hparams is not None:
           pars = json.loads(hf.read())
           hparams.update(pars)    # if inside several files we change the same parameter, it will overwrite for the one in the last file    
     
-## read data
+###---Read data
 data = io.read_data(inp_file)
 
 data['isSignal'] = (data['processIndex'] < 5).astype(np.float32)
@@ -81,7 +81,7 @@ X = data[features]
 y = data['isSignal'].values.reshape(-1,1)
 w = np.abs(data['weight'].values.ravel())
 
-# sort out model parameters
+###---Sort out model parameters
 def get_kwargs(fn,**kwargs):
     params = set(fn.__code__.co_varnames[:fn.__code__.co_argcount]+tuple(kwargs.keys()))
     for par in params:
@@ -92,23 +92,26 @@ def get_kwargs(fn,**kwargs):
     return kwargs
 
 loss_params=dict()
-init_kwargs = get_kwargs(pivot.PivotClassifier.__init__, monitor_dir=options.out_dir, loss_params=loss_params)
+init_kwargs = get_kwargs(pivot.PivotClassifier.__init__, monitor_dir=options.out_dir, lambd=options.lambd)
 fit_kwargs = get_kwargs(pivot.PivotClassifier.fit, batch_size=options.batch_size, epochs=options.epochs, syst_shift={('leadmva','subleadmva'):[0, -0.01, 0.01]})
+pretrain_clf_kwargs = { 'batch_size' : 4096, 'epochs' : 1 }
+pretrain_dsc_kwargs = { 'batch_size' : 4096, 'epochs' : 3 }
 
-print(init_kwargs)
-print(fit_kwargs)
-
-clf = ffwd.FFWDRegression('clf', X.shape[1:], y.shape[1:], loss='binary_crossentropy')
-dsc = ffwd.FFWDRegression('dsc', y.shape[1:], (1, 3), loss='categorical_crossentropy')
-net = pivot.PivotClassifier('pivot', clf, dsc)
-
-## if load_moedels
-## keras load model
-## clf.model = model 
+###---Prepare net model
+clf = ffwd.FFWDRegression('clf', X.shape[1:], y.shape[1:], loss='binary_crossentropy', monitor_dir=options.out_dir+"/pretrain/")
+dsc = ffwd.FFWDRegression('dsc', y.shape[1:], (1, 3), loss='categorical_crossentropy', monitor_dir=options.out_dir+"/pretrain/")
+net = pivot.PivotClassifier('pivot', clf, dsc, **init_kwargs)   
 
 pprint(net.get_params())
 
-adv_model, dsc_model = net()
+adv_model, dsc_model = net()        
+
+###---Load pretrained model for CLF and DSC
+if not options.pretrain:
+    if options.clf_pretrain_weights != "":
+        clf.model.load_weights(options.clf_pretrain_weights)
+    if options.dsc_pretrain_weights != "":
+        dsc.model.load_weights(options.dsc_pretrain_weights)
 
 print(adv_model.summary())
 print(dsc_model.summary())
@@ -151,5 +154,7 @@ else :
     ### here if you want to save hdf file after each better epoch, put kfold=-1
     net.fit(X_train,y_train,w_train,
             validation_data=(X_valid,y_valid,w_valid),
-            **fit_kwargs)
+            pretrain_clf_kwargs=pretrain_clf_kwargs,
+            **fit_kwargs
+    )
 

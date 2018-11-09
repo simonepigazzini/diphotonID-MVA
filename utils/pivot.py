@@ -33,9 +33,9 @@ from . import losses
 class PivotClassifier(BaseEstimator):
     
     def __init__(self, name, clf, dsc, 
-                 dsc_optimizer='Adam', dsc_optimizer_params=dict(lr=1.e-04), 
-                 adv_optimizer='Adam', adv_optimizer_params=dict(lr=1.e-04), 
-                 ext_dsc_inputs=False, lambd=50.,monitor_dir="./"):
+                 dsc_optimizer='Adam', dsc_optimizer_params=dict(lr=2.e-04), 
+                 adv_optimizer='Adam', adv_optimizer_params=dict(lr=2.e-04), 
+                 ext_dsc_inputs=False, lambd=1.,monitor_dir="./"):
         
         self.lambd = lambd
         self.clf = clf
@@ -86,8 +86,8 @@ class PivotClassifier(BaseEstimator):
     # ----------------------------------------------------------------------------------------------
     def get_callbacks(self,monitor='loss',save_best_only=True,label=""):
         monitor_dir = self.monitor_dir
-        csv = CSVLogger("%s/%s_metrics.csv" % (label,monitor_dir))
-        checkpoint = ModelCheckpoint("%s/%s-model-{epoch:02d}.hdf5" % (label,monitor_dir),
+        csv = CSVLogger("%s/%s_metrics.csv" % (monitor_dir,label))
+        checkpoint = ModelCheckpoint("%s/%s-model-{epoch:02d}.hdf5" % (monitor_dir,label),
                                      monitor=monitor,save_best_only=save_best_only,
                                      save_weights_only=False)
         return [csv,checkpoint]
@@ -100,18 +100,24 @@ class PivotClassifier(BaseEstimator):
             epochs=1,n_adv_steps=1,n_dsc_steps=100,
             batch_size=256,
             print_every=10,
-            pretrain=False,pretrain_clf_args=dict(),
-            pretrain_dsc_args=dict(),
+            pretrain=False,
+            pretrain_clf_kwargs=dict(),
+            pretrain_dsc_kwargs=dict(),
             syst_shift={}
     ):
         
         if pretrain:
-            self.clf.fit(X_train,y_train[:,0],w_train,validation_data=validation_data,**pretrain_clf_args) ## FIXME doesn't work
-            ## y_pred = self.clf.predict(X_train)
-            ## dsc_inputs = [y_pred]
-            ## if self.ext_adv_inputs:
-            ##     dsc_inputs.append(X_train)
-            ## self.dsc.fit(dsc_inputs,y_train[:,1:],w_train,validation_data=dsc_validation_data,**pretrain_dsc_args)
+            self.clf(docompile=True)
+            self.clf.model.trainable = True
+            self.clf.fit(X_train,y_train[:,0],w_train,validation_data=validation_data,**pretrain_clf_kwargs) ## FIXME doesn't work
+            self.clf.model.trainable = False
+            self.dsc(docompile=True)
+            self.dsc.model.trainable = True                        
+            y_pred = self.clf.predict(X_train)
+            dsc_inputs = [y_pred]
+            # if self.ext_adv_inputs:
+            #     dsc_inputs.append(X_train)
+            self.dsc.fit(dsc_inputs,y_train[:,1:],w_train,validation_data=validation_data,**pretrain_dsc_args)
             
         adv_model,dsc_model = self(docompile=True)
         
@@ -144,7 +150,8 @@ class PivotClassifier(BaseEstimator):
                     Xb,yb,wb = next(ep_gen)
                     adv_loss.append( adv_model.train_on_batch(Xb,yb,wb) )
                     if si % print_every == 1:
-                        sprog.set_postfix( OrderedDict( [ ("dsc_loss",np.array(dsc_loss).mean()), ("adv_loss",np.array(adv_loss).mean(axis=0)) ] ) )
+                        sprog.set_postfix( OrderedDict( [ ("dsc_loss",np.array(dsc_loss).mean()), 
+                                                          ("adv_loss, adv_clf_loss, adv_dsc_loss",np.array(adv_loss).mean(axis=0)) ] ) )
                 
             dsc_loss = np.array(dsc_loss).mean()
             adv_loss = np.array(adv_loss).mean(axis=0)
