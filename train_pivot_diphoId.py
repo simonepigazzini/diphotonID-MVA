@@ -44,6 +44,7 @@ parser.add_argument('--seed', type=int, dest='seed', default=98543)
 parser.add_argument('--x-val', action='store_true', dest='x_val', default=False)
 parser.add_argument('--nkfolds', type=int, dest='nkfolds', default=5)
 parser.add_argument('--pretrain', action='store_true', dest='pretrain', default=False)
+parser.add_argument('--ext-dsc-inputs', action='store_true', dest='ext_dsc_inputs', default=False)
 parser.add_argument('--clf-pretrain-weights', type=str, dest='clf_pretrain_weights', default='')
 parser.add_argument('--dsc-pretrain-weights', type=str, dest='dsc_pretrain_weights', default='')
 
@@ -52,6 +53,10 @@ argcomplete.autocomplete(parser)
 options = parser.parse_args()
 
 options.out_dir = options.out_dir
+if options.pretrain:
+    options.out_dir += '/pretrain/'
+else:
+    options.out_dir += '_lambda'+str(options.lambd)
 os.makedirs(options.out_dir, exist_ok=True)
 
 if options.features == '':
@@ -80,6 +85,8 @@ data['isBkg'] = (data['processIndex'] >= 5).astype(np.float32)
 X = data[features]
 y = data['isSignal'].values.reshape(-1,1)
 w = np.abs(data['weight'].values.ravel())
+w[(y==1).ravel()] /= w[(y==1).ravel()].sum() / w[(y==1).ravel()].shape[0]
+w[(y==0).ravel()] /= w[(y==0).ravel()].sum() / w[(y==1).ravel()].shape[0]
 
 ###---Sort out model parameters
 def get_kwargs(fn,**kwargs):
@@ -93,13 +100,16 @@ def get_kwargs(fn,**kwargs):
 
 loss_params=dict()
 init_kwargs = get_kwargs(pivot.PivotClassifier.__init__, monitor_dir=options.out_dir, lambd=options.lambd)
-fit_kwargs = get_kwargs(pivot.PivotClassifier.fit, batch_size=options.batch_size, epochs=options.epochs, syst_shift={('leadmva','subleadmva'):[0, -0.01, 0.01]})
-pretrain_clf_kwargs = { 'batch_size' : 4096, 'epochs' : 1 }
-pretrain_dsc_kwargs = { 'batch_size' : 4096, 'epochs' : 3 }
+fit_kwargs = get_kwargs(pivot.PivotClassifier.fit, batch_size=options.batch_size, epochs=options.epochs, syst_shift={('leadmva','subleadmva'):[0, -0.1, 0.1]})
+pretrain_clf_kwargs = { 'batch_size' : 8192, 'epochs' : options.epochs }
+pretrain_dsc_kwargs = { 'batch_size' : 8192, 'epochs' : options.epochs*10 }
 
 ###---Prepare net model
-clf = ffwd.FFWDRegression('clf', X.shape[1:], y.shape[1:], loss='binary_crossentropy', monitor_dir=options.out_dir+"/pretrain/")
-dsc = ffwd.FFWDRegression('dsc', y.shape[1:], (1, 3), loss='categorical_crossentropy', monitor_dir=options.out_dir+"/pretrain/")
+clf = ffwd.FFWDRegression('clf', X.shape[1:], y.shape[1:], loss='binary_crossentropy', monitor_dir=options.out_dir)
+if options.ext_dsc_inputs:
+    dsc = ffwd.FFWDRegression('dsc', y.shape[1:], (1, 3), input_shape_extra=X.shape[1:], loss='categorical_crossentropy', monitor_dir=options.out_dir)
+else:
+    dsc = ffwd.FFWDRegression('dsc', y.shape[1:], (1, 3), loss='categorical_crossentropy', monitor_dir=options.out_dir)
 net = pivot.PivotClassifier('pivot', clf, dsc, **init_kwargs)   
 
 pprint(net.get_params())
@@ -107,14 +117,15 @@ pprint(net.get_params())
 adv_model, dsc_model = net()        
 
 ###---Load pretrained model for CLF and DSC
-if not options.pretrain:
-    if options.clf_pretrain_weights != "":
-        clf.model.load_weights(options.clf_pretrain_weights)
-    if options.dsc_pretrain_weights != "":
-        dsc.model.load_weights(options.dsc_pretrain_weights)
+#if not options.pretrain:
+if options.clf_pretrain_weights != "":
+    clf.model.load_weights(options.clf_pretrain_weights)
+if options.dsc_pretrain_weights != "":
+    dsc.model.load_weights(options.dsc_pretrain_weights)
 
 print(adv_model.summary())
 print(dsc_model.summary())
+print(dsc().summary())
 
 adv_model_summary = str(adv_model.to_json()) 
 dsc_model_summary = str(dsc_model.to_json()) 
@@ -155,6 +166,7 @@ else :
     net.fit(X_train,y_train,w_train,
             validation_data=(X_valid,y_valid,w_valid),
             pretrain_clf_kwargs=pretrain_clf_kwargs,
+            pretrain_dsc_kwargs=pretrain_dsc_kwargs,
             **fit_kwargs
     )
 

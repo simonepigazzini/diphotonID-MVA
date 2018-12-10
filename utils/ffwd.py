@@ -37,7 +37,7 @@ class ConstOffsetLayer(Layer):
 # --------------------------------------------------------------------------------------------------
 class FFWDRegression(BaseEstimator):
 
-    def __init__(self,name,input_shape,output_shape=None,
+    def __init__(self,name,input_shape,output_shape=None,input_shape_extra=None,
                  non_neg=False,
                  dropout=0.2, # 0.5 0.2
                  batch_norm=True,activations="lrelu",
@@ -55,6 +55,7 @@ class FFWDRegression(BaseEstimator):
         self.name = name
         self.input_shape = input_shape
         self.output_shape = output_shape
+        self.input_shape_extra = input_shape_extra
         self.const_output_biases = const_output_biases
 
         self.non_neg = non_neg
@@ -103,11 +104,22 @@ class FFWDRegression(BaseEstimator):
             
         if self.model is None:
             inputs = Input(shape=self.input_shape,name="%s_inp" % self.name)
-            
             if len(self.input_shape)>1:
                 L = Flatten(name="%s_flt" % self.name)(inputs)
             else:
                 L = inputs
+            
+            if self.input_shape_extra is not None:
+                inputs_extra = Input(shape=self.input_shape_extra,name="%s_extra_inp" % self.name)
+                if len(self.input_shape_extra)>1:
+                    L_extra = Flatten(name="%s_extra_flt" % self.name)(inputs_extra)
+                else:
+                    L_extra = inputs_extra
+                #L = concatenate(name="%s_inp_concat" % self.name)([L,L_extra])
+                L = concatenate([L,L_extra])
+                inputs = [inputs,inputs_extra]
+
+            
             if self.do_bn0:
                 L = BatchNormalization(name="%s_bn0" % self.name)(L)
                 
@@ -196,7 +208,7 @@ class FFWDRegression(BaseEstimator):
     #     return model.fit(X_train,y_train,**kwargs)
 
     # ----------------------------------------------------------------------------------------------
-    def fit(self,X,y,w=None,kfold=-1,**kwargs):
+    def fit(self,X,y,w=None,kfold=-1,extra_inputs=None,**kwargs):
 
         model = self(True)
         
@@ -225,8 +237,10 @@ class FFWDRegression(BaseEstimator):
             kwargs['callbacks'] = self.get_callbacks(has_valid=has_valid,
                                                      save_best_only=save_best_only,kfold=kfold)
     
-        return model.fit(X_train,y_train,sample_weight=w_train,**kwargs)
-
+        if extra_inputs is not None:
+            return model.fit([X_train, extra_inputs], y_train,sample_weight=w_train,**kwargs)
+        else:
+            return model.fit(X_train,y_train,sample_weight=w_train,**kwargs)
 
     # ----------------------------------------------------------------------------------------------
     def fit_generator(self,generator,kfold=-1,**kwargs):

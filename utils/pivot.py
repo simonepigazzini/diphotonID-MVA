@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from keras.layers import Input, Dense, Add, Multiply
-from keras.layers import Reshape, UpSampling1D, Flatten, concatenate, Cropping1D
+from keras.layers import Reshape, UpSampling1D, Flatten, Concatenate, Cropping1D
 from keras.layers import Activation, LeakyReLU, PReLU, Lambda
 from keras.layers import BatchNormalization, Dropout
 from keras.models import Model, Sequential
@@ -33,7 +33,7 @@ from . import losses
 class PivotClassifier(BaseEstimator):
     
     def __init__(self, name, clf, dsc, 
-                 dsc_optimizer='Adam', dsc_optimizer_params=dict(lr=2.e-04), 
+                 dsc_optimizer='Adam', dsc_optimizer_params=dict(lr=2.e-03), 
                  adv_optimizer='Adam', adv_optimizer_params=dict(lr=2.e-04), 
                  ext_dsc_inputs=False, lambd=1.,monitor_dir="./"):
         
@@ -56,7 +56,10 @@ class PivotClassifier(BaseEstimator):
         clf = self.clf(docompile=False)
         dsc = self.dsc(docompile=False)
         
-        wrapped_inputs = clf.outputs
+        if self.ext_dsc_inputs:
+            wrapped_inputs = [clf.outputs[0], clf.input]
+        else:
+            wrapped_inputs = clf.outputs
         wrapped_clf = clf(clf.inputs)
         wrapped_adv = dsc(wrapped_inputs)
         
@@ -98,7 +101,7 @@ class PivotClassifier(BaseEstimator):
     def fit(self,X_train,y_train,w_train=None,
             validation_data=None,
             epochs=1,n_adv_steps=1,n_dsc_steps=100,
-            batch_size=256,
+            batch_size=4096,
             print_every=10,
             pretrain=False,
             pretrain_clf_kwargs=dict(),
@@ -106,18 +109,35 @@ class PivotClassifier(BaseEstimator):
             syst_shift={}
     ):
         
+        ###---pretrain both CLF and DSC using all the available data:
+        ###   - the DCS input is taken from the CLF prediction + CLF inputs unshifted!
+        ###   - The input to the DCS are formatted using Generator()
         if pretrain:
+            #---CLF
             self.clf(docompile=True)
             self.clf.model.trainable = True
-            self.clf.fit(X_train,y_train[:,0],w_train,validation_data=validation_data,**pretrain_clf_kwargs) ## FIXME doesn't work
+            self.clf.fit(X_train,y_train,w_train,validation_data=validation_data,**pretrain_clf_kwargs) 
+            #---DSC
             self.clf.model.trainable = False
             self.dsc(docompile=True)
             self.dsc.model.trainable = True                        
-            y_pred = self.clf.predict(X_train)
-            dsc_inputs = [y_pred]
-            # if self.ext_adv_inputs:
-            #     dsc_inputs.append(X_train)
-            self.dsc.fit(dsc_inputs,y_train[:,1:],w_train,validation_data=validation_data,**pretrain_dsc_args)
+            pgen = Generator(X_train,y_train,w_train,len(X_train.index),syst_shift=syst_shift)
+            vgen = Generator(*validation_data,len(validation_data[0].index),syst_shift=syst_shift)
+            
+            pdata = []
+            for igen in pgen,vgen:
+                Xorig,X,y,w = next(igen())
+                which=(y[0] == 1).ravel()
+                Xorig = Xorig[which]
+                X = X[which]
+                y = [ yy[which] for yy in y ]
+                w = [ ww[which] for ww in w ]
+                y_pred = self.clf.predict(X).reshape(-1, 1)
+                pdata.append( (Xorig,X,y,w,y_pred) )
+            (Xorig,X,y,w,y_pred), (Xvorig,Xv,yv,wv,yv_pred) = pdata
+            pretrain_dsc_kwargs["validation_data"] = ([yv_pred, Xvorig], yv[-1][:,np.newaxis,1:], wv[-1])
+            self.dsc.fit(y_pred, y[-1][:,np.newaxis,1:], w[-1], extra_inputs=Xorig.values, **pretrain_dsc_kwargs)
+            return
             
         adv_model,dsc_model = self(docompile=True)
         
@@ -136,7 +156,7 @@ class PivotClassifier(BaseEstimator):
                      dsc_loss_valid=[],
                      adv_loss_valid=[],adv_clf_loss_valid=[],adv_dsc_loss_valid=[])
         
-        eprog =  tqdm(range(epochs),"epoch")
+        eprog =  tqdm(range(epochs),"")
         for ei in eprog:
             ep_gen = gen()
             dsc_loss = []
@@ -144,10 +164,10 @@ class PivotClassifier(BaseEstimator):
             sprog = tqdm(range(nsteps),"epoch %d" % ei,leave=True)
             for si in sprog:
                 for di in range(n_dsc_steps):
-                    Xb,yb,wb = next(ep_gen)
-                    dsc_loss.append( dsc_model.train_on_batch(Xb,yb[-1],wb[-1]) )
+                    Xb_orig,Xb,yb,wb = next(ep_gen)
+                    dsc_loss.append( dsc_model.train_on_batch(Xb_orig,yb[-1],wb[-1]) )
                 for ai in range(n_adv_steps):
-                    Xb,yb,wb = next(ep_gen)
+                    Xb_orig,Xb,yb,wb = next(ep_gen)
                     adv_loss.append( adv_model.train_on_batch(Xb,yb,wb) )
                     if si % print_every == 1:
                         sprog.set_postfix( OrderedDict( [ ("dsc_loss",np.array(dsc_loss).mean()), 
@@ -178,6 +198,7 @@ class Generator:
     
     def __init__(self,X,y,w,batch_size,syst_shift={}):
 
+        self.origX = X
         self.X = X
         self.y = y
         self.w = w
@@ -199,7 +220,7 @@ class Generator:
             self.X[feats] += np.sum( (labels*shifts), axis=2)
             print(self.y.shape, labels[:,0,:].shape)
             self.y2.append( labels[:,0,:] )
-
+            
         self.y2 = np.hstack( self.y2 )
         print( X.shape, y.shape, self.y2.shape, w.shape )
 
@@ -209,10 +230,10 @@ class Generator:
     
     def __call__(self,returny1=True):
         
-        self.X,self.y,self.y2,self.w = shuffle(self.X,self.y,self.y2,self.w)    
+        self.origX,self.X,self.y,self.y2,self.w = shuffle(self.origX,self.X,self.y,self.y2,self.w)    
 
         def mk_ret(p0,p1):
-            ret = [self.X.iloc[p0:p1]]
+            ret = [self.origX.iloc[p0:p1], self.X.iloc[p0:p1]]
             if returny1:
                 ret.extend( [ [self.y[p0:p1],self.y2[p0:p1]], [self.w[p0:p1],self.w[p0:p1]] ] )
             else:
