@@ -57,7 +57,7 @@ class PivotClassifier(BaseEstimator):
         dsc = self.dsc(docompile=False)
         
         if self.ext_dsc_inputs:
-            wrapped_inputs = [clf.outputs[0], clf.input]
+            wrapped_inputs = [clf.outputs[0], clf.get_input_at(0)]
         else:
             wrapped_inputs = clf.outputs
         wrapped_clf = clf(clf.inputs)
@@ -137,62 +137,68 @@ class PivotClassifier(BaseEstimator):
             (Xorig,X,y,w,y_pred), (Xvorig,Xv,yv,wv,yv_pred) = pdata
             pretrain_dsc_kwargs["validation_data"] = ([yv_pred, Xvorig], yv[-1][:,np.newaxis,1:], wv[-1])
             self.dsc.fit(y_pred, y[-1][:,np.newaxis,1:], w[-1], extra_inputs=Xorig.values, **pretrain_dsc_kwargs)
-            return
-            
-        adv_model,dsc_model = self(docompile=True)
-        
-        gen = Generator(X_train,y_train,w_train,batch_size,syst_shift=syst_shift)
-        nbatches = gen.nbatches() 
-        nsteps = nbatches // (n_dsc_steps+n_adv_steps)
-        
-        if validation_data is not None:
-            vgen = Generator(*validation_data,batch_size,syst_shift=syst_shift)
 
-        ## callbacks=self.get_callbacks(save_best_only=save_best_only,label="adv")
-        ## callbacks=self.get_callbacks(save_best_only=save_best_only,label="dsc")
-        
-        store = dict(dsc_loss=[],
-                     adv_loss=[],adv_clf_loss=[],adv_dsc_loss=[],
-                     dsc_loss_valid=[],
-                     adv_loss_valid=[],adv_clf_loss_valid=[],adv_dsc_loss_valid=[])
-        
-        eprog =  tqdm(range(epochs),"")
-        for ei in eprog:
-            ep_gen = gen()
-            dsc_loss = []
-            adv_loss = []
-            sprog = tqdm(range(nsteps),"epoch %d" % ei,leave=True)
-            for si in sprog:
-                for di in range(n_dsc_steps):
-                    Xb_orig,Xb,yb,wb = next(ep_gen)
-                    dsc_loss.append( dsc_model.train_on_batch(Xb_orig,yb[-1],wb[-1]) )
-                for ai in range(n_adv_steps):
-                    Xb_orig,Xb,yb,wb = next(ep_gen)
-                    adv_loss.append( adv_model.train_on_batch(Xb,yb,wb) )
-                    if si % print_every == 1:
-                        sprog.set_postfix( OrderedDict( [ ("dsc_loss",np.array(dsc_loss).mean()), 
-                                                          ("adv_loss, adv_clf_loss, adv_dsc_loss",np.array(adv_loss).mean(axis=0)) ] ) )
-                
-            dsc_loss = np.array(dsc_loss).mean()
-            adv_loss = np.array(adv_loss).mean(axis=0)
-            epostfix = [ ("dsc_loss",dsc_loss), ("adv_loss",adv_loss) ]
-            store["dsc_loss"].append(dsc_loss)
-            store["adv_loss"].append(adv_loss[0])
-            store["adv_clf_loss"].append(adv_loss[1])
-            store["adv_dsc_loss"].append(adv_loss[2])
+        else:
+            adv_model,dsc_model = self(docompile=True)
+
+            gen = Generator(X_train,y_train,w_train,batch_size,syst_shift=syst_shift)
+            nbatches = gen.nbatches() 
+            nsteps = nbatches // (n_dsc_steps+n_adv_steps)
+
             if validation_data is not None:
-                dsc_loss_valid = dsc_model.evaluate_generator(vgen(False),steps=vgen.nbatches())
-                adv_loss_valid = adv_model.evaluate_generator(vgen(True),steps=vgen.nbatches())
-                epostfix += [ ("dsc_loss_valid",dsc_loss_valid), ("adv_loss_valid",np.array(adv_loss_valid)) ]
-                store["dsc_loss_valid"].append(dsc_loss_valid)
-                store["adv_loss_valid"].append(adv_loss_valid[0])
-                store["adv_clf_loss_valid"].append(adv_loss_valid[1])
-                store["adv_dsc_loss_valid"].append(adv_loss_valid[2])
-            eprog.set_postfix( epostfix )
-            pd.DataFrame(store).to_csv(self.monitor_dir+"/pivot_metrics.csv")
-            ## FIXME save models
-            
+                vgen = Generator(*validation_data,batch_size,syst_shift=syst_shift)
 
+            ## callbacks=self.get_callbacks(save_best_only=save_best_only,label="adv")
+            ## callbacks=self.get_callbacks(save_best_only=save_best_only,label="dsc")
+
+            store = dict(dsc_loss=[],
+                         adv_loss=[],adv_clf_loss=[],adv_dsc_loss=[],
+                         dsc_loss_valid=[],
+                         adv_loss_valid=[],adv_clf_loss_valid=[],adv_dsc_loss_valid=[])
+
+            eprog =  tqdm(range(epochs),"")
+            for ei in eprog:
+                ep_gen = gen()
+                dsc_loss = []
+                adv_loss = []
+                sprog = tqdm(range(nsteps),"epoch %d" % ei,leave=True)
+                for si in sprog:
+                    for di in range(n_dsc_steps):
+                        Xb_orig,Xb,yb,wb = next(ep_gen)
+                        dsc_loss.append( dsc_model.train_on_batch(Xb_orig,yb[-1],wb[-1]) )
+                    for ai in range(n_adv_steps):
+                        Xb_orig,Xb,yb,wb = next(ep_gen)
+                        adv_loss.append( adv_model.train_on_batch(Xb,yb,wb) )
+                        if si % print_every == 1:
+                            sprog.set_postfix( OrderedDict( [ ("dsc_loss",np.array(dsc_loss).mean()), 
+                                                              ("adv_loss, adv_clf_loss, adv_dsc_loss",np.array(adv_loss).mean(axis=0)) ] ) )
+
+                dsc_loss = np.array(dsc_loss).mean()
+                adv_loss = np.array(adv_loss).mean(axis=0)
+                epostfix = [ ("dsc_loss",dsc_loss), ("adv_loss",adv_loss) ]
+                store["dsc_loss"].append(dsc_loss)
+                store["adv_loss"].append(adv_loss[0])
+                store["adv_clf_loss"].append(adv_loss[1])
+                store["adv_dsc_loss"].append(adv_loss[2])
+                if validation_data is not None:
+                    dsc_loss_valid = dsc_model.evaluate_generator(vgen(return_y1=False, return_orig_feat=False), steps=vgen.nbatches())
+                    adv_loss_valid = adv_model.evaluate_generator(vgen(return_y1=True, return_orig_feat=False), steps=vgen.nbatches())
+                    epostfix += [ ("dsc_loss_valid",dsc_loss_valid), ("adv_loss_valid",np.array(adv_loss_valid)) ]
+                    store["dsc_loss_valid"].append(dsc_loss_valid)
+                    store["adv_loss_valid"].append(adv_loss_valid[0])
+                    store["adv_clf_loss_valid"].append(adv_loss_valid[1])
+                    store["adv_dsc_loss_valid"].append(adv_loss_valid[2])
+                eprog.set_postfix( epostfix )
+                pd.DataFrame(store).to_csv(self.monitor_dir+"/pivot_metrics.csv")
+                
+                #---Save all models
+                formatter = '{:0'+str(len(str(epochs)))+'}'
+                f_epoch_str = formatter.format(ei)
+                self.clf.model.save(self.monitor_dir+'/clf-model-'+f_epoch_str+'.hdf5')
+                self.dsc.model.save(self.monitor_dir+'/dsc-model-'+f_epoch_str+'.hdf5')
+                adv_model.save(self.monitor_dir+'/adv-model-'+f_epoch_str+'.hdf5')
+                dsc_model.save(self.monitor_dir+'/adv-dsc-model-'+f_epoch_str+'.hdf5')
+            
 # --------------------------------------------------------------------------------------------------
 class Generator:
     
@@ -228,13 +234,16 @@ class Generator:
     def nbatches(self):
         return self.nb + (self.last_batch!=0)
     
-    def __call__(self,returny1=True):
+    def __call__(self, return_y1=True, return_orig_feat=True):
         
         self.origX,self.X,self.y,self.y2,self.w = shuffle(self.origX,self.X,self.y,self.y2,self.w)    
 
         def mk_ret(p0,p1):
-            ret = [self.origX.iloc[p0:p1], self.X.iloc[p0:p1]]
-            if returny1:
+            if return_orig_feat:
+                ret = [self.origX.iloc[p0:p1], self.X.iloc[p0:p1]]
+            else:
+                ret = [self.X.iloc[p0:p1]]
+            if return_y1:
                 ret.extend( [ [self.y[p0:p1],self.y2[p0:p1]], [self.w[p0:p1],self.w[p0:p1]] ] )
             else:
                 ret.extend( [ self.y2[p0:p1],self.w[p0:p1] ] )

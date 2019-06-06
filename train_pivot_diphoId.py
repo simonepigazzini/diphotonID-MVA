@@ -56,7 +56,7 @@ options.out_dir = options.out_dir
 if options.pretrain:
     options.out_dir += '/pretrain/'
 else:
-    options.out_dir += '_lambda'+str(options.lambd)
+    options.out_dir += 'lambda_'+str(options.lambd)
 os.makedirs(options.out_dir, exist_ok=True)
 
 if options.features == '':
@@ -117,7 +117,6 @@ pprint(net.get_params())
 adv_model, dsc_model = net()        
 
 ###---Load pretrained model for CLF and DSC
-#if not options.pretrain:
 if options.clf_pretrain_weights != "":
     clf.model.load_weights(options.clf_pretrain_weights)
 if options.dsc_pretrain_weights != "":
@@ -126,6 +125,7 @@ if options.dsc_pretrain_weights != "":
 print(adv_model.summary())
 print(dsc_model.summary())
 print(dsc().summary())
+print(clf().summary())
 
 adv_model_summary = str(adv_model.to_json()) 
 dsc_model_summary = str(dsc_model.to_json()) 

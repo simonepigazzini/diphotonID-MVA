@@ -151,5 +151,5 @@ else :
 
     reg.fit(X_train,y_train,w_train,kfold=-1,  ### here if you want to save hdf file after each better epoch, put -1
             validation_data=(X_valid,y_valid,w_valid),
-            **fit_kwargs)
+            **fit_kwargs, n_adv_steps=5, n_dsc_steps=20)
 
