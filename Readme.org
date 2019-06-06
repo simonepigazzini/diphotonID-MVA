@@ -19,7 +19,7 @@
 
     - Run the training:
     #+BEGIN_EXAMPLE
-    ./train_ffwd_diphoId.py 
+    ./train_pivot_diphoId.py 
     #+END_EXAMPLE
 
     
